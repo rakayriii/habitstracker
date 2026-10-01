@@ -1,0 +1,8 @@
+# Each test file boots its own SQLite database, seeds it, and runs the Flutter
+# binding. Running several of those at once starves the widget and layout
+# suites, which are the slowest here, so the files are run two at a time.
+concurrency: 2
+
+# A widget test that walks nine routes has work to do; the default 30 seconds
+# is tight once the seed is in the picture.
+timeout: 120s
