@@ -107,7 +107,7 @@ void main() {
 
     // The seeded P1 that is still open leads the "next up" line.
     final next = container.read(nextFocusProvider);
-    expect(next?.title, 'Lengkapi modul Finance di MyOS');
+    expect(next?.title, 'Lengkapi modul Finance di Nexa');
 
     final open = (await repository()
             .watchForDate(container.read(todayProvider))

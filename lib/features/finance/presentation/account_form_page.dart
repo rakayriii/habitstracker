@@ -16,9 +16,10 @@ import '../providers/finance_providers.dart';
 /// Create or edit an account. One screen for both, because the fields are the
 /// same and a separate edit form would be a copy with a different title.
 ///
-/// The balance is not editable here. Changing money is the job of a
-/// transaction; the form only sets the opening balance, and only when the
-/// account is being created.
+/// The balance is never stored. When creating, the opening balance is recorded
+/// as a ledger entry. When editing, the field states the balance the account
+/// should have and the difference from the one the ledger implies is recorded
+/// as an adjustment, so a correction stays explainable.
 class AccountFormPage extends ConsumerStatefulWidget {
   const AccountFormPage({super.key, this.accountId});
 
@@ -59,6 +60,12 @@ class _AccountFormPageState extends ConsumerState<AccountFormPage> {
     _notes.text = account.notes ?? '';
     _type = account.type;
     _isLiability = account.isLiability;
+    // Prefilled with the current balance, so saving an untouched form corrects
+    // nothing. An overdrawn asset starts empty: the amount field only takes
+    // non-negative numbers, and showing its magnitude would ask for the
+    // opposite of the correction.
+    _initialBalance.text =
+        account.balance < 0 ? '' : Fmt.group(account.balance);
   }
 
   @override
@@ -197,7 +204,7 @@ class _AccountFormPageState extends ConsumerState<AccountFormPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               FormSection(
-                title: 'Saldo saat ini',
+                title: 'Saldo',
                 children: [
                   Row(
                     children: [
@@ -213,10 +220,18 @@ class _AccountFormPageState extends ConsumerState<AccountFormPage> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: MyOSSpace.xs),
+                  const SizedBox(height: MyOSSpace.md),
+                  AppAmountField(
+                    label: 'Saldo saat ini',
+                    controller: _initialBalance,
+                    error: _balanceError,
+                    helper: _balanceHelper(data),
+                  ),
                   Text(
-                    'Saldo dihitung dari transaksi. Untuk mengubahnya, catat '
-                    'transaksi baru dari menu Transaksi.',
+                    'Saldo tetap dihitung dari transaksi. Selisih antara angka '
+                    'di atas dengan nominal yang Anda isi dicatat sebagai '
+                    'transaksi penyesuaian, jadi setiap rupiah pada saldo '
+                    'punya transaksi yang bisa dibuka.',
                     style: MyOSText.dataSm.copyWith(
                       fontSize: 10,
                       height: 14 / 10,
@@ -274,6 +289,17 @@ class _AccountFormPageState extends ConsumerState<AccountFormPage> {
     );
   }
 
+  /// Says what the field is for, and names the one case where it starts empty
+  /// instead of holding the current figure.
+  String _balanceHelper(Account account) {
+    final base = account.isLiability
+        ? 'Nominal utang yang sebenarnya ada. Kosongkan kalau sudah benar.'
+        : 'Nominal yang sebenarnya ada di akun ini. Kosongkan kalau sudah '
+            'benar.';
+    if (account.balance >= 0) return base;
+    return '$base Saldo sekarang negatif, jadi field ini dibiarkan kosong.';
+  }
+
   bool _validate() {
     setState(() {
       _nameError = _name.text.trim().isEmpty ? 'Nama akun wajib diisi' : null;
@@ -298,6 +324,9 @@ class _AccountFormPageState extends ConsumerState<AccountFormPage> {
           type: _type,
           notes: _notes.text,
           isLiability: _isLiability,
+          // An empty field means the balance was not corrected, so the ledger
+          // is left alone instead of the form guessing a number.
+          balance: Fmt.parseAmount(_initialBalance.text),
         );
       } else {
         await actions.createAccount(

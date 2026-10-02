@@ -120,6 +120,69 @@ void main() {
       await second.close();
     });
 
+    test('a balance correction is not repeated after a restart', () async {
+      final first = AppDatabase.forTesting(NativeDatabase(file));
+      final firstContainer = containerFor(first);
+      await first.select(first.accounts).get();
+
+      final account =
+          await firstContainer.read(accountRepositoryProvider).create(
+        name: 'BCA',
+        type: AccountType.bank,
+        initialBalance: 2000000,
+      );
+      await firstContainer.read(accountRepositoryProvider).update(
+        account.id,
+        name: 'BCA',
+        type: AccountType.bank,
+        balance: 5000000,
+      );
+
+      firstContainer.dispose();
+      await first.close();
+
+      // Second launch: the same file, as if the app had been restarted.
+      final second = AppDatabase.forTesting(NativeDatabase(file));
+      final secondContainer = containerFor(second);
+      await second.select(second.accounts).get();
+
+      final accounts = secondContainer.read(accountRepositoryProvider);
+      expect((await accounts.findById(account.id))!.balance, 5000000);
+
+      final entries = (await secondContainer
+              .read(transactionRepositoryProvider)
+              .watchAll()
+              .first)
+          .where((t) => t.accountId == account.id)
+          .toList();
+      expect(
+        entries.where((t) => t.title.startsWith('Penyesuaian saldo')),
+        hasLength(1),
+        reason: 'the adjustment is a row, not a recomputed figure',
+      );
+      expect(entries, hasLength(2), reason: 'opening plus one adjustment');
+
+      // Opening the form again and saving without touching it must not add a
+      // second adjustment, which is the same code path the app runs on resume.
+      await accounts.update(
+        account.id,
+        name: 'BCA',
+        type: AccountType.bank,
+        balance: 5000000,
+      );
+      final afterResave = (await secondContainer
+              .read(transactionRepositoryProvider)
+              .watchAll()
+              .first)
+          .where((t) => t.accountId == account.id)
+          .toList();
+      expect(afterResave, hasLength(2));
+      expect((await accounts.findById(account.id))!.balance, 5000000);
+
+      secondContainer.dispose();
+      await second.close();
+    });
+
     test('the seed does not come back after the user deletes it', () async {
       final first = AppDatabase.forTesting(NativeDatabase(file));
       final firstContainer = containerFor(first);

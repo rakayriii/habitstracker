@@ -7,9 +7,11 @@ import '../database/app_database.dart';
 
 /// Accounts and assets.
 ///
-/// Balances are never accepted from the caller. They are derived from the
-/// ledger, so the only way to change one is to record a transaction, which
-/// keeps the ledger and the balance in agreement by construction.
+/// Balances are never written straight into the account row by a caller. They
+/// are derived from the ledger, so the only way to change one is to record a
+/// transaction, which keeps the ledger and the balance in agreement by
+/// construction. [update] takes a target balance and turns the difference into
+/// such a transaction rather than storing the number.
 class AccountRepository {
   AccountRepository(this._db);
 
@@ -123,6 +125,18 @@ class AccountRepository {
     return created;
   }
 
+  /// Updates an account's own fields, and optionally its balance.
+  ///
+  /// When [balance] is given it is the balance the account should end up with,
+  /// not a value to store. The difference between it and the balance the
+  /// ledger currently implies is recorded as an adjustment transaction, so the
+  /// requested figure and the ledger agree without the ledger being rewritten.
+  /// A target that matches the current balance records nothing, which is what
+  /// keeps a repeated save, a rebuild or a restart from stacking adjustments.
+  ///
+  /// The fields, the adjustment and the refreshed balance all happen in one
+  /// transaction: either the account ends up at the requested balance with an
+  /// entry that explains it, or nothing changes.
   Future<void> update(
     String id, {
     required String name,
@@ -130,6 +144,7 @@ class AccountRepository {
     String currency = 'IDR',
     String? notes,
     bool? isLiability,
+    int? balance,
   }) async {
     final trimmed = name.trim();
     if (trimmed.isEmpty) {
@@ -139,20 +154,59 @@ class AccountRepository {
     if (existing == null) {
       throw NotFoundException('Akun $id tidak ditemukan');
     }
-    final changed = await (_db.update(_db.accounts)..where((r) => r.id.equals(id)))
-        .write(
-          AccountsCompanion(
-            name: Value(trimmed),
-            type: Value(type.name),
-            currency: Value(currency),
-            notes: Value(_nullIfEmpty(notes)),
-            isLiability:
-                isLiability == null ? const Value.absent() : Value(isLiability),
-            updatedAt: Value(DateTime.now()),
-          ),
-        );
-    if (changed == 0) throw NotFoundException('Akun $id tidak ditemukan');
-    await _db.refreshAccountBalances();
+    final now = DateTime.now();
+    // The adjustment has to speak the sign of the account as it will be after
+    // this save, not as it is now: flipping the liability switch inverts the
+    // way the ledger is read into a balance.
+    final liability = isLiability ?? existing.isLiability;
+
+    await _db.transaction(() async {
+      final changed = await (_db.update(_db.accounts)
+            ..where((r) => r.id.equals(id)))
+          .write(
+        AccountsCompanion(
+          name: Value(trimmed),
+          type: Value(type.name),
+          currency: Value(currency),
+          notes: Value(_nullIfEmpty(notes)),
+          isLiability:
+              isLiability == null ? const Value.absent() : Value(isLiability),
+          updatedAt: Value(now),
+        ),
+      );
+      if (changed == 0) throw NotFoundException('Akun $id tidak ditemukan');
+
+      if (balance != null) {
+        // The liability switch may have just changed the sign the balance is
+        // read with, so re-derive before comparing against the target.
+        await _db.refreshAccountBalances();
+        final row = await (_db.select(_db.accounts)
+              ..where((r) => r.id.equals(id)))
+            .getSingle();
+        // A liability reports the negated ledger sum, so moving its balance up
+        // by one rupiah means moving the ledger down by one rupiah.
+        final change = balance - row.balance;
+        final ledgerDelta = liability ? -change : change;
+        if (ledgerDelta != 0) {
+          await _db.into(_db.transactions).insert(
+            TransactionsCompanion.insert(
+              id: IdGen.next('tx'),
+              accountId: id,
+              amount: ledgerDelta.abs(),
+              type: ledgerDelta > 0
+                  ? TransactionTypeName.income
+                  : TransactionTypeName.expense,
+              title: 'Penyesuaian saldo $trimmed',
+              category: const Value('Penyesuaian'),
+              date: now,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+        }
+      }
+      await _db.refreshAccountBalances();
+    });
   }
 
   Future<void> setArchived(String id, bool archived) async {

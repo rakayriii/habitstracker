@@ -166,12 +166,15 @@ class FinanceActions {
     );
   }
 
+  /// [balance] is the balance the account should have after the save, not a
+  /// number to store. Null leaves the balance alone.
   Future<void> updateAccount({
     required String id,
     required String name,
     required AccountType type,
     String? notes,
     bool? isLiability,
+    int? balance,
   }) {
     return _accounts.update(
       id,
@@ -179,6 +182,7 @@ class FinanceActions {
       type: type,
       notes: notes,
       isLiability: isLiability,
+      balance: balance,
       currency: _ref.read(defaultCurrencyProvider),
     );
   }

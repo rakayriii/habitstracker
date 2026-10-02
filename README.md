@@ -1,6 +1,6 @@
-# MyOS
+# Nexa
 
-Personal operating system untuk keuangan, target, dan proyek. Flutter, Riverpod,
+Nexa adalah personal operating system untuk keuangan, target, dan proyek. Flutter, Riverpod,
 go_router, Drift/SQLite. Local-first: tidak ada backend, tidak ada akun, tidak
 ada sinkronisasi cloud.
 
@@ -61,6 +61,12 @@ Aturan yang dipegang:
 - `Accounts.balance` adalah cache. Satu-satunya sumber kebenaran adalah ledger
   `transactions`; setiap perubahan ledger memanggil
   `AppDatabase.refreshAccountBalances()` di transaksi database yang sama.
+- Saldo akun tidak pernah ditulis langsung dari form, termasuk saat form Edit
+  akun dipakai untuk membetulkan saldo. Selisih antara saldo yang diminta dan
+  saldo yang dihitung ledger dicatat sebagai transaksi
+  `Penyesuaian saldo <nama>` di `AccountRepository.update`, jadi setiap rupiah
+  pada saldo tetap punya transaksi yang bisa dibuka. Akun kewajiban memakai
+  tanda yang terbalik: menambah utang berarti menambah pengeluaran.
 - Tanggal dan jam masuk lewat `clockProvider`, bukan `DateTime.now()` di dalam
   widget, supaya perhitungan periode dan pace bisa diuji.
 
@@ -101,6 +107,30 @@ Deviation yang disengaja, tercatat di kode dan di sini:
   Dinaikkan ke `#7E8794` (4,7:1) dengan peran dan posisi ramp yang sama.
 - Ikon navigasi memakai glyph stroke Material, bukan SVG 1,75px, supaya tidak
   menambah dependensi icon set.
+
+## Ikon launcher
+
+Logo sumber ada di `logo_nexa.png`. Aset Android dihasilkan dari file itu
+oleh `tool/generate_launcher_icons.py`, bukan digambar ulang:
+
+```bash
+python3 tool/generate_launcher_icons.py
+```
+
+Script itu lifted monogram dari file sumber memakai antialiasing file itu
+sebagai mask, lalu menaruhnya di atas warna canvas dan accent aplikasi
+(`#001135` dan `#E3F2FD`). Geometri logo tidak diubah, dan tidak ada gradien,
+glow, bayangan, atau teks di dalam ikon.
+
+Hasilnya:
+
+- `res/mipmap-<density>/ic_launcher.png` untuk API < 26
+- `res/mipmap-<density>/ic_launcher_foreground.png` untuk adaptive icon, dengan
+  latar `@color/ic_launcher_background` di `res/values/colors.xml`
+- `res/mipmap-anydpi-v26/ic_launcher.xml` dan `ic_launcher_round.xml`
+
+Kanvas adaptive 108dp dengan safe zone 72dp, dan monogram selalu di dalam zona
+itu, jadi tidak ada mask launcher yang bisa memotongnya.
 
 ## Test
 

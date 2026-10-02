@@ -509,7 +509,7 @@ Future<void> _seedProjects(
 
   await insertProject(
     id: 'prj-myos',
-    name: 'MyOS',
+    name: 'Nexa',
     description: 'Personal operating system untuk keuangan, target, dan proyek.',
     status: ProjectStatus.inDevelopment,
     category: 'System',
@@ -628,7 +628,7 @@ Future<void> _seedFocus(AppDatabase db, DateTime now) async {
     FocusPriority.p1,
     done: true,
   );
-  await add('Lengkapi modul Finance di MyOS', FocusPriority.p1);
+  await add('Lengkapi modul Finance di Nexa', FocusPriority.p1);
   await add('Review runbook cutover Nexus Core', FocusPriority.p2);
   await add('Jadwalkan DCA Bitcoin bulan ini', FocusPriority.p2);
   await add('Long run 5K, target di bawah 20 menit', FocusPriority.p3);

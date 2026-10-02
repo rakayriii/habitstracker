@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Nexa launcher icon background. Same value as the canvas token in
+         lib/core/constants/design_tokens.dart, so the icon and the app read as
+         one surface. -->
+    <color name="ic_launcher_background">#001135</color>
+</resources>

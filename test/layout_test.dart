@@ -51,6 +51,7 @@ void main() {
       '/',
       '/finance',
       '/finance/accounts',
+      '/finance/account/acc-bitcoin',
       '/goals',
       '/goals/goal-emergency-fund',
       '/goals/goal-emergency-fund/edit',

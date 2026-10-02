@@ -14,7 +14,7 @@ class MyOSApp extends StatelessWidget {
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: MyOSTheme.systemUi,
       child: MaterialApp.router(
-        title: 'MyOS',
+        title: 'Nexa',
         debugShowCheckedModeBanner: false,
         theme: MyOSTheme.dark,
         routerConfig: router,

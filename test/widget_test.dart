@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:habitstracker/app/app.dart';
 import 'package:habitstracker/app/router.dart';
+import 'package:habitstracker/core/utils/formatters.dart';
+import 'package:habitstracker/core/widgets/forms.dart';
 import 'package:habitstracker/data/database/data_providers.dart';
 
 import 'support/test_harness.dart';
@@ -52,7 +54,7 @@ void main() {
 
       // Seeded rows are on screen, which means the screen read the database.
       expect(find.text('Sub-20min 5K Run'), findsOneWidget);
-      expect(find.text('MyOS'), findsWidgets);
+      expect(find.text('Nexa'), findsWidgets);
 
       // The focus list is below the fold on a 360x800 phone, so it is brought
       // into view before it is checked.
@@ -146,12 +148,12 @@ void main() {
     await withHarness(tester, (harness) async {
       await tester.tap(find.text('Projects').last);
       await settle(tester);
-      expect(find.text('MyOS'), findsWidgets);
+      expect(find.text('Nexa'), findsWidgets);
 
       await tester.tap(find.text('ON HOLD 1'));
       await settle(tester);
       expect(find.text('Seva'), findsWidgets);
-      expect(find.text('MyOS'), findsNothing);
+      expect(find.text('Nexa'), findsNothing);
     });
   });
 
@@ -182,12 +184,12 @@ void main() {
       await tester.tap(find.text('Projects').last);
       await settle(tester);
 
-      await tester.tap(find.text('MyOS').first);
+      await tester.tap(find.text('Nexa').first);
       await settle(tester);
 
       expect(find.text('Task terbuka'), findsOneWidget);
       expect(find.text('Task selesai'), findsOneWidget);
-      // MyOS is seeded with eight tasks, four of them done.
+      // The seeded Nexa project has eight tasks, four of them done.
       // The line sits under the meter in the header and again on the Projects
       // list behind it, so more than one match is expected here.
       expect(find.text('4/8 task selesai'), findsWidgets);
@@ -244,6 +246,86 @@ void main() {
       await settle(tester);
 
       expect(find.text('Nama akun wajib diisi'), findsOneWidget);
+    });
+  });
+
+  // The chain this covers is the whole point of the feature: a balance typed in
+  // the edit form has to reach the allocation, the summary and home, and it
+  // has to arrive as a ledger entry rather than a number in a column. The
+  // rendered figures are compared as sets because the exact rupiah strings on
+  // the hub screens are not the subject of this test; the arithmetic behind
+  // them is asserted in test/data/finance_repository_test.dart.
+  testWidgets('an account balance can be corrected from the edit form',
+      (tester) async {
+    await withHarness(tester, (harness) async {
+      Set<String> rupiahOnScreen() {
+        final finder = find.textContaining(RegExp(r'^Rp '));
+        return {
+          for (final widget in tester.widgetList<Text>(finder)) widget.data!,
+        };
+      }
+
+      final homeBefore = rupiahOnScreen();
+      expect(homeBefore, isNotEmpty);
+
+      await tester.tap(find.text('Finance').last);
+      await settle(tester);
+      expect(find.text('Alokasi aset'), findsOneWidget);
+
+      // The allocation row opens the account it belongs to.
+      await tapFirstVisible(tester, find.text('Bitcoin'));
+      await settle(tester);
+      expect(find.text('Edit akun'), findsOneWidget);
+
+      final field = find.descendant(
+        of: find.byType(AppAmountField),
+        matching: find.byType(TextField),
+      );
+      expect(field, findsOneWidget);
+      final prefilled = tester.widget<TextField>(field).controller!.text;
+      expect(prefilled, isNotEmpty, reason: 'opens on the real balance');
+      expect(Fmt.parseAmount(prefilled), isNotNull);
+
+      await tester.enterText(field, '1.500.000');
+      await settle(tester);
+      await tester.tap(find.text('Simpan perubahan'));
+      await settle(tester);
+
+      // Back on finance, the allocation reads the corrected balance and the
+      // adjustment is in the ledger as a transaction of its own.
+      expect(find.text('Alokasi aset'), findsOneWidget);
+      expect(find.textContaining(RegExp(r'1,5 jt')), findsWidgets);
+      await scrollUntilFound(tester, find.text('Penyesuaian saldo Bitcoin'));
+      expect(find.text('Penyesuaian saldo Bitcoin'), findsOneWidget);
+
+      // Reopening the form shows what was stored, not what was typed before.
+      await tapFirstVisible(tester, find.text('Bitcoin'));
+      await settle(tester);
+      expect(
+        tester
+            .widget<TextField>(
+              find.descendant(
+                of: find.byType(AppAmountField),
+                matching: find.byType(TextField),
+              ),
+            )
+            .controller!
+            .text,
+        '1.500.000',
+      );
+
+      // Saving it again as it stands must not record a second adjustment.
+      await tester.tap(find.text('Simpan perubahan'));
+      await settle(tester);
+      await scrollUntilFound(tester, find.text('Penyesuaian saldo Bitcoin'));
+      expect(find.text('Penyesuaian saldo Bitcoin'), findsOneWidget);
+
+      // Home watches the same summary, so the corrected balance shows up there
+      // with no refresh of its own.
+      router.go('/');
+      await settle(tester);
+      expect(find.text('HOME'), findsOneWidget);
+      expect(rupiahOnScreen(), isNot(homeBefore));
     });
   });
 }

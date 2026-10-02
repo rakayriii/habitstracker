@@ -1,9 +1,12 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:habitstracker/data/database/data_providers.dart';
+import 'package:habitstracker/data/repositories/account_repository.dart';
+import 'package:habitstracker/data/repositories/transaction_repository.dart';
 import 'package:habitstracker/domain/errors.dart';
 import 'package:habitstracker/domain/models/account.dart';
 import 'package:habitstracker/domain/models/finance_summary.dart';
 import 'package:habitstracker/domain/models/transaction.dart';
+import 'package:habitstracker/features/finance/providers/finance_providers.dart';
 
 import '../support/test_harness.dart';
 
@@ -118,6 +121,378 @@ void main() {
       );
       final updated = await repository.findById('acc-bitcoin');
       expect(updated!.name, 'Bitcoin cold wallet');
+    });
+  });
+
+  // Editing a balance is the one operation that has to write to the ledger to
+  // take effect, because the ledger is what a balance is derived from. These
+  // tests pin that down: the difference becomes an entry, the balance follows,
+  // and later transactions work from the corrected figure.
+  group('balance correction', () {
+    late AccountRepository accounts;
+    late TransactionRepository ledger;
+
+    setUp(() {
+      accounts = harness.container.read(accountRepositoryProvider);
+      ledger = harness.container.read(transactionRepositoryProvider);
+    });
+
+    Future<List<Transaction>> entriesOf(String accountId) async {
+      final all = await ledger.watchAll().first;
+      return all.where((t) => t.accountId == accountId).toList();
+    }
+
+    Future<Transaction> adjustmentOf(String accountId) async {
+      return (await entriesOf(accountId))
+          .singleWhere((t) => t.title.startsWith('Penyesuaian saldo'));
+    }
+
+    test('raising the balance records the difference as income', () async {
+      final account = await accounts.create(
+        name: 'E-wallet GoPay',
+        type: AccountType.ewallet,
+        initialBalance: 500000,
+      );
+      expect(account.balance, 500000);
+
+      await accounts.update(
+        account.id,
+        name: account.name,
+        type: account.type,
+        balance: 800000,
+      );
+
+      expect((await accounts.findById(account.id))!.balance, 800000);
+
+      final adjustment = await adjustmentOf(account.id);
+      expect(adjustment.type, TransactionType.income);
+      expect(adjustment.amount, 300000);
+      expect(adjustment.category, 'Penyesuaian');
+      // The opening entry it corrects is still there, untouched.
+      expect(
+        (await entriesOf(account.id))
+            .where((t) => t.title == 'Saldo awal E-wallet GoPay'),
+        hasLength(1),
+      );
+    });
+
+    test('lowering the balance records the difference as an expense', () async {
+      final account = await accounts.create(
+        name: 'BCA',
+        type: AccountType.bank,
+        initialBalance: 5000000,
+      );
+
+      await accounts.update(
+        account.id,
+        name: account.name,
+        type: account.type,
+        balance: 3500000,
+      );
+
+      expect((await accounts.findById(account.id))!.balance, 3500000);
+      final adjustment = await adjustmentOf(account.id);
+      expect(adjustment.type, TransactionType.expense);
+      expect(adjustment.amount, 1500000);
+    });
+
+    test('a correction does not discard the existing history', () async {
+      final account = await accounts.create(
+        name: 'Tabungan Utama',
+        type: AccountType.bank,
+        initialBalance: 2000000,
+      );
+      await ledger.create(
+        amount: 250000,
+        type: TransactionType.expense,
+        accountId: account.id,
+        title: 'Biaya admin',
+        date: TestHarness.fixedNow,
+      );
+      final beforeIds =
+          (await entriesOf(account.id)).map((t) => t.id).toSet();
+
+      await accounts.update(
+        account.id,
+        name: account.name,
+        type: account.type,
+        balance: 5000000,
+      );
+
+      final after = await entriesOf(account.id);
+      expect(after.map((t) => t.id), containsAll(beforeIds));
+      expect(after, hasLength(beforeIds.length + 1));
+      expect((await accounts.findById(account.id))!.balance, 5000000);
+    });
+
+    test('later income and expense work from the corrected balance', () async {
+      final account = await accounts.create(
+        name: 'Tabungan Utama',
+        type: AccountType.bank,
+        initialBalance: 2000000,
+      );
+      await accounts.update(
+        account.id,
+        name: account.name,
+        type: account.type,
+        balance: 5000000,
+      );
+      expect((await accounts.findById(account.id))!.balance, 5000000);
+
+      await ledger.create(
+        amount: 500000,
+        type: TransactionType.expense,
+        accountId: account.id,
+        title: 'Belanja',
+        date: TestHarness.fixedNow,
+      );
+      expect((await accounts.findById(account.id))!.balance, 4500000);
+
+      await ledger.create(
+        amount: 1000000,
+        type: TransactionType.income,
+        accountId: account.id,
+        title: 'Gaji',
+        date: TestHarness.fixedNow,
+      );
+      expect((await accounts.findById(account.id))!.balance, 5500000);
+    });
+
+    test('a second correction measures from the corrected balance', () async {
+      final account = await accounts.create(
+        name: 'Tabungan Utama',
+        type: AccountType.bank,
+        initialBalance: 2000000,
+      );
+      await accounts.update(
+        account.id,
+        name: account.name,
+        type: account.type,
+        balance: 5000000,
+      );
+      await ledger.create(
+        amount: 500000,
+        type: TransactionType.expense,
+        accountId: account.id,
+        title: 'Belanja',
+        date: TestHarness.fixedNow,
+      );
+      await ledger.create(
+        amount: 1000000,
+        type: TransactionType.income,
+        accountId: account.id,
+        title: 'Gaji',
+        date: TestHarness.fixedNow,
+      );
+      expect((await accounts.findById(account.id))!.balance, 5500000);
+
+      await accounts.update(
+        account.id,
+        name: account.name,
+        type: account.type,
+        balance: 7000000,
+      );
+
+      expect((await accounts.findById(account.id))!.balance, 7000000);
+      final adjustments = (await entriesOf(account.id))
+          .where((t) => t.title.startsWith('Penyesuaian saldo'))
+          .toList();
+      expect(adjustments, hasLength(2));
+      // 1.500.000 apart, not 5.000.000: the second one is measured from the
+      // balance the first one produced.
+      expect(adjustments.last.amount, 1500000);
+
+      await ledger.create(
+        amount: 1000000,
+        type: TransactionType.expense,
+        accountId: account.id,
+        title: 'Tagihan',
+        date: TestHarness.fixedNow,
+      );
+      expect((await accounts.findById(account.id))!.balance, 6000000);
+    });
+
+    test('saving the balance the account already has records nothing',
+        () async {
+      final account = await accounts.create(
+        name: 'BCA',
+        type: AccountType.bank,
+        initialBalance: 2000000,
+      );
+      final before = (await entriesOf(account.id)).length;
+
+      // A form that was opened and saved without being touched.
+      await accounts.update(
+        account.id,
+        name: account.name,
+        type: account.type,
+        balance: 2000000,
+      );
+      await accounts.update(
+        account.id,
+        name: account.name,
+        type: account.type,
+        balance: 2000000,
+      );
+
+      expect(await entriesOf(account.id), hasLength(before));
+      expect((await accounts.findById(account.id))!.balance, 2000000);
+    });
+
+    test('leaving the balance out of an update changes nothing', () async {
+      final account = await accounts.create(
+        name: 'BCA',
+        type: AccountType.bank,
+        initialBalance: 2000000,
+      );
+      final before = await entriesOf(account.id);
+
+      await accounts.update(
+        account.id,
+        name: 'BCA Tabungan',
+        type: account.type,
+        notes: 'dipindah ke bank lain',
+      );
+
+      final after = await accounts.findById(account.id);
+      expect(after!.name, 'BCA Tabungan');
+      expect(after.balance, 2000000);
+      expect(await entriesOf(account.id), hasLength(before.length));
+    });
+
+    test('a liability keeps its sign when the balance is corrected', () async {
+      final card = await accounts.create(
+        name: 'BCA Credit',
+        type: AccountType.creditCard,
+        initialBalance: 850000,
+        isLiability: true,
+      );
+      expect(card.balance, 850000);
+
+      // More debt owed.
+      await accounts.update(
+        card.id,
+        name: card.name,
+        type: card.type,
+        isLiability: true,
+        balance: 3500000,
+      );
+      var updated = await accounts.findById(card.id);
+      expect(updated!.balance, 3500000);
+      expect(updated.isLiability, isTrue);
+      expect((await adjustmentOf(card.id)).type, TransactionType.expense);
+      expect((await adjustmentOf(card.id)).amount, 2650000);
+
+      // Less debt owed is money moving back onto the card.
+      await accounts.update(
+        card.id,
+        name: card.name,
+        type: card.type,
+        isLiability: true,
+        balance: 350000,
+      );
+      updated = await accounts.findById(card.id);
+      expect(updated!.balance, 350000);
+
+      final adjustments = (await entriesOf(card.id))
+          .where((t) => t.title.startsWith('Penyesuaian saldo'))
+          .toList();
+      expect(adjustments, hasLength(2));
+      expect(adjustments.last.type, TransactionType.income);
+      expect(adjustments.last.amount, 3150000);
+
+      await ledger.create(
+        amount: 100000,
+        type: TransactionType.expense,
+        accountId: card.id,
+        title: 'Belanja kartu',
+        date: TestHarness.fixedNow,
+      );
+      expect((await accounts.findById(card.id))!.balance, 450000);
+    });
+
+    test('the summary and allocation follow a correction', () async {
+      final account = await accounts.create(
+        name: 'E-wallet GoPay',
+        type: AccountType.ewallet,
+        initialBalance: 500000,
+      );
+
+      // Baseline after the account exists, so the only movement left is the
+      // correction itself.
+      final summary = await firstValue(
+        harness.container,
+        financeSummaryProvider,
+      );
+      await settleStreams();
+      expect(summary.totalAssets, greaterThanOrEqualTo(500000));
+
+      await accounts.update(
+        account.id,
+        name: account.name,
+        type: account.type,
+        balance: 3000000,
+      );
+
+      await waitUntil(
+        () => harness.container
+            .read(financeSummaryProvider)
+            .requireValue
+            .totalAssets ==
+            summary.totalAssets + 2500000,
+      );
+      final after = harness.container.read(financeSummaryProvider).requireValue;
+
+      expect(after.totalAssets, summary.totalAssets + 2500000);
+      expect(after.netWorth, summary.netWorth + 2500000);
+      expect(after.liquidValue, summary.liquidValue + 2500000);
+
+      final slice =
+          after.allocation.singleWhere((s) => s.accountId == account.id);
+      expect(slice.value, 3000000);
+      expect(slice.label, 'E-wallet GoPay');
+      expect(slice.weight, closeTo(3000000 / after.totalAssets, 0.0001));
+      expect(
+        after.allocation.fold<double>(0, (sum, s) => sum + s.weight),
+        closeTo(1.0, 0.001),
+      );
+    });
+
+    test('a correction on an account the user created reaches home',
+        () async {
+      // Home watches this same stream, so an update that lands here lands on
+      // the home hub without any extra refresh step.
+      final before = await firstValue(
+        harness.container,
+        financeSummaryProvider,
+      );
+      await settleStreams();
+
+      await accounts.update(
+        'acc-global-equities',
+        name: 'Global Equities',
+        type: AccountType.stocks,
+        balance: 12000000,
+      );
+
+      await waitUntil(
+        () => harness.container
+                .read(financeSummaryProvider)
+                .requireValue
+                .netWorth >
+            before.netWorth,
+      );
+      final after = harness.container.read(financeSummaryProvider).requireValue;
+
+      expect((await accounts.findById('acc-global-equities'))!.balance,
+          12000000);
+      expect(after.netWorth, greaterThan(before.netWorth));
+      expect(
+        after.allocation
+            .singleWhere((s) => s.accountId == 'acc-global-equities')
+            .value,
+        12000000,
+      );
     });
   });
 
